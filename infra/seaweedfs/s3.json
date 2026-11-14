@@ -1,0 +1,20 @@
+{
+  "identities": [
+    {
+      "name": "cap22",
+      "credentials": [
+        {
+          "accessKey": "cap22",
+          "secretKey": "cap22-local-dev"
+        }
+      ],
+      "actions": [
+        "Admin",
+        "Read",
+        "Write",
+        "List",
+        "Tagging"
+      ]
+    }
+  ]
+}

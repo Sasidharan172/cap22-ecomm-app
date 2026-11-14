@@ -1,0 +1,15 @@
+# Java / Maven
+target/
+*.class
+
+# Eclipse/IDE
+.project
+.classpath
+.settings/
+.factorypath
+.apt_generated/
+.apt_generated_tests/
+
+# Logs
+*.log
+logs/

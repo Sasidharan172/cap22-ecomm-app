@@ -1,0 +1,149 @@
+name: deploy
+
+# Build/push backend and frontend images, then SSH into the EC2 instance and
+# roll out the new containers via docker compose (frontend + backend only).
+#
+# Prerequisites on the EC2 instance (one-time):
+#   - Docker + Compose v2 installed and enabled
+#   - ~/cap22/docker-compose.prod.yml (frontend + backend services; backend depends_on healthy)
+#   - ~/cap22/.env (DH_USER/TAG/DB_URL/DB_USER/DB_PASSWORD/APP_USER/APP_PASSWORD/...)
+#   - The instance can pull from Docker Hub (or docker login configured under ~/cap22)
+#   - SSH key for access; private key stored in repo secret EC2_SSH_KEY
+#
+# Required repository secrets:
+#   DOCKERHUB_USERNAME, DOCKERHUB_TOKEN
+#   EC2_HOST     (IP or DNS of the EC2 instance)
+#   EC2_USER     (SSH user, e.g. ec2-user for AL2023 or ubuntu for Ubuntu)
+#   EC2_SSH_KEY  (private key, PEM/OpenSSH)
+# Optional:
+#   EC2_PORT     (default 22)
+#   EC2_APP_DIR  (default ~/cap22)
+#   EC2_COMPOSE_FILE (default docker-compose.prod.yml)
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build/deploy (defaults to short SHA; git tags use the tag name)'
+        required: false
+        type: string
+
+env:
+  BACKEND_IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/cap22-backend
+  FRONTEND_IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/cap22-frontend
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-push:
+    name: Build and push images
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      sha: ${{ steps.meta.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Compute tags
+        id: meta
+        run: |
+          SHA_TAG="${GITHUB_SHA::7}"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            TAG="${GITHUB_REF_NAME}"
+          elif [ -n "${{ inputs.tag }}" ]; then
+            TAG="${{ inputs.tag }}"
+          else
+            TAG="$SHA_TAG"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "sha=$SHA_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push backend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          push: true
+          platforms: linux/amd64
+          tags: |
+            ${{ env.BACKEND_IMAGE }}:${{ steps.meta.outputs.tag }}
+            ${{ env.BACKEND_IMAGE }}:${{ steps.meta.outputs.sha }}
+            ${{ env.BACKEND_IMAGE }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push frontend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          push: true
+          platforms: linux/amd64
+          tags: |
+            ${{ env.FRONTEND_IMAGE }}:${{ steps.meta.outputs.tag }}
+            ${{ env.FRONTEND_IMAGE }}:${{ steps.meta.outputs.sha }}
+            ${{ env.FRONTEND_IMAGE }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    name: Deploy to EC2
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    environment: production
+    steps:
+      - name: Rollout via SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          port: ${{ secrets.EC2_PORT || 22 }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script_stop: true
+          command_timeout: 20m
+          envs: TAG
+          script: |
+            set -euo pipefail
+            APP_DIR="${{ vars.EC2_APP_DIR || '~/cap22' }}"
+            COMPOSE_FILE="${{ vars.EC2_COMPOSE_FILE || 'docker-compose.prod.yml' }}"
+            export TAG="${{ needs.build-and-push.outputs.tag }}"
+
+            cd "$APP_DIR"
+            echo "Deploying tag: $TAG from $APP_DIR ($COMPOSE_FILE)"
+
+            # Ensure TAG is used by docker compose (.env should reference DH_USER/TAG)
+            # If your .env hardcodes TAG, uncomment and update via sed (backup first):
+            # cp .env .env.bak
+            # sed -i.bak -E "s/^TAG=.*/TAG=${TAG}/" .env
+
+            docker compose -f "$COMPOSE_FILE" --env-file .env pull
+            docker compose -f "$COMPOSE_FILE" --env-file .env up -d
+            docker compose -f "$COMPOSE_FILE" ps
+
+            # Wait briefly and check health (non-fatal if tooling/port differs; logs are the source of truth)
+            for i in $(seq 1 30); do
+              if curl -fsS http://localhost >/dev/null 2>&1; then
+                echo "Frontend reachable on localhost"
+                break
+              fi
+              sleep 2
+            done
+            docker compose -f "$COMPOSE_FILE" logs --tail=50 backend || true
+            docker image prune -f

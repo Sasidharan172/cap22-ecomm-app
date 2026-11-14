@@ -1,0 +1,67 @@
+name: cap22-ecom
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    profiles: ["localdb"]
+    environment:
+      POSTGRES_DB: cap22
+      POSTGRES_USER: cap22
+      POSTGRES_PASSWORD: cap22
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cap22 -d cap22"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  backend:
+    build:
+      context: ./backend
+    environment:
+      DB_URL: ${DB_URL:-jdbc:postgresql://postgres:5432/cap22}
+      DB_USER: ${DB_USER:-cap22}
+      DB_PASSWORD: ${DB_PASSWORD:-cap22}
+      APP_USER: ${APP_USER:-admin}
+      APP_PASSWORD: ${APP_PASSWORD:-admin123}
+    ports:
+      - "8080:8080"
+
+  frontend:
+    build:
+      context: ./frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+
+  cdc-worker:
+    build:
+      context: ./cdc-worker
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-}
+      DB_HOST: ${CDC_DB_HOST:-postgres}
+      DB_PORT: ${CDC_DB_PORT:-5432}
+      DB_NAME: ${CDC_DB_NAME:-cap22}
+      DB_USER: ${CDC_DB_USER:-cap22}
+      DB_PASSWORD: ${CDC_DB_PASSWORD:-cap22}
+      DB_SSLMODE: ${CDC_DB_SSLMODE:-}
+      S3_BUCKET: ${S3_BUCKET:-}
+      S3_PREFIX: ${S3_PREFIX:-cdc/raw}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+      S3_ENDPOINT_URL: ${S3_ENDPOINT_URL:-}
+      CDC_POLL_SECONDS: ${CDC_POLL_SECONDS:-3600}
+      CDC_BATCH_SIZE: ${CDC_BATCH_SIZE:-500}
+      CDC_MAX_BATCHES_PER_CYCLE: ${CDC_MAX_BATCHES_PER_CYCLE:-10}
+      CDC_EXPORT_ENABLED: ${CDC_EXPORT_ENABLED:-true}
+    depends_on:
+      - backend
+
+volumes:
+  postgres-data:

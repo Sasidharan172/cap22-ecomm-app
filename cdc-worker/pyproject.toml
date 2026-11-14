@@ -1,0 +1,20 @@
+[project]
+name = "cap22-cdc-worker"
+version = "0.1.0"
+description = "CDC worker: exports Postgres outbox changes to S3 (JSONL) for Snowflake ingestion"
+requires-python = ">=3.11"
+dependencies = [
+  "boto3>=1.34.0",
+  "psycopg[binary]>=3.2.0",
+  "python-dotenv>=1.0.1",
+]
+
+[project.scripts]
+cdc-worker = "cdc_worker.worker:main"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
