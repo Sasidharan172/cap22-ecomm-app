@@ -121,7 +121,7 @@ jobs:
           envs: TAG
           script: |
             set -euo pipefail
-            APP_DIR="${{ vars.EC2_APP_DIR || '~/cap22' }}"
+            APP_DIR="${{ vars.EC2_APP_DIR || '$HOME/cap22' }}"
             COMPOSE_FILE="${{ vars.EC2_COMPOSE_FILE || 'docker-compose.prod.yml' }}"
             export TAG="${{ needs.build-and-push.outputs.tag }}"
 
